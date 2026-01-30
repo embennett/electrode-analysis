@@ -1,6 +1,6 @@
 #imports
 from pathlib import Path
-import allego_file_reader as afr
+import Code.allego_file_reader as afr
 
 #fxn the list all xdat sources
 def list_xdat_sources(target_dir):
