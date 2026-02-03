@@ -156,6 +156,6 @@ def add_display_names(master_df, dataset_index, display_names):
         display_dict[dataset] = pretty
 
     # Save to metadata
-    master_df.attrs['dataset_display_names'] = display_dict
+    master_df.attrs['display_names'] = display_dict
 
     return display_dict
