@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import os
 from pathlib import Path
 import numpy as np
+import pandas as pd
 
 # plots one channel of one dataset for the desired time index
 def plot_channel(
@@ -25,17 +26,16 @@ def plot_channel(
         df.index,
         df[(dataset_name, channel_id)],
         color=colors.get(dataset_name, None),
-        label = display_dict(dataset_name, dataset_name),
-        fontsize = 14,
-        alpha=0.7
+        label = display_dict.get(dataset_name, dataset_name),
+        alpha=0.9
         )
     
-    plt.title(f'Electorde {channel_id} - {display_dict.get(dataset_name, dataset_name)}')
+    plt.title(f'Electrode {channel_id} - {display_dict.get(dataset_name, dataset_name)}', fontsize = 14)
     plt.xlabel('Time (s)')
     plt.ylabel('Amplitude (µV)')
     if ylim != None:
         plt.ylim(ylim)
-    plt.grid(alpha=0.3)
+    #plt.grid(alpha=0.3)
 
     filename = f"{dataset_name}_channel{channel_id}.png"
     save_path = os.path.join(figures_dir, filename)
@@ -110,7 +110,6 @@ def plot_channel_across_files(
 def raster_plot(
         master_df,
         channel_id,
-        dataset_names,
         t_start=None,
         t_end=None,
         offset = 1.0,
@@ -122,29 +121,45 @@ def raster_plot(
     
     colors = master_df.attrs.get('file_colors', {})
     display_names = master_df.attrs.get('display_names', {})
+    datasets = master_df.columns.get_level_values(0).unique()
     
-    n = len(dataset_names)
+    n = len(datasets)
     plt.figure(figsize = (8, 1.5*n))
 
-    for i, dataset in enumerate(dataset):
-        y = df[(dataset, channel_id)] + i * offset
+    # compute a reasonable vertical spacing
+    signals = [df[(ds, channel_id)] for ds in datasets]
+    ptp = max(s.max() - s.min() for s in signals)
+    spacing = ptp * 1.2   # 20% padding
+
+
+    for i, dataset in enumerate(datasets):
+        s = df[(dataset, channel_id)]
+
+        # slice time PER dataset
+        if t_start is not None or t_end is not None:
+            s = s.loc[t_start:t_end]
+
+        s = pd.to_numeric(s, errors="coerce").dropna()
+
         plt.plot(
-            df.index,
-            y,
+            s.index,
+            s + i * spacing,
             color=colors.get(dataset, None),
             alpha=0.7
-        )
+    )
+ 
 
     # Y-axis labels at the middle of each trace
-    yticks = [i * offset for i in range(n)]
-    plt.yticks(yticks, display_names)
+    yticks = [i * spacing for i in range(n)]
+    ylabels = [display_names.get(ds, ds) for ds in datasets]
+    plt.yticks(yticks, ylabels)
 
     plt.xlabel('Time (s)')
-    plt.title(f'Channel {channel_id} stacked traces')
+    plt.title(f'Channel {channel_id} All Traces')
     plt.grid(alpha=0.3)
     plt.tight_layout()
 
-    filename = f"{dataset}_channel{channel_id}.png"
+    filename = f"channel{channel_id}_stacked.png"
     save_path = os.path.join(figures_dir, filename)
     plt.savefig(save_path, dpi=300)
 
@@ -214,7 +229,7 @@ def analyze_spike(signal_spike, time_spike):
     }
 
 
-def plot_spike_with_events(signal_spike, time_spike, metrics, Dose):
+def plot_spike_with_events(signal_spike, time_spike, metrics, Dose, save_path=None):
     """
     signal_spike: array of voltage values
     time_spike: array of corresponding times
@@ -264,6 +279,12 @@ def spike_bar_graphs_all(dfs, channel_id, master_df, figures_dir):
     - Bar graphs for time, absolute potential, ΔV, and slopes
 
     All figures are saved to figures_dir.
+
+    Parameters:
+        dfs: list of pd.DataFrames, pre-sliced per dataset
+        channel_id: int, channel to analyze
+        master_df: pd.DataFrame, the master dataframe (for display names/colors)
+        figures_dir: str, directory to save figures
     """
 
     metric_groups = [
@@ -297,11 +318,11 @@ def spike_bar_graphs_all(dfs, channel_id, master_df, figures_dir):
     width = 0.8 / n_datasets
     x_positions = np.linspace(0.2, 0.8, 3)
 
-    # ---------- PER-DATASET SPIKE PLOTS ----------
     metrics_by_dataset = {}
 
+    # ---------- PER-DATASET SPIKE PLOTS ----------
     for df in dfs:
-        dataset_name = df.columns.levels[0][0]
+        dataset_name = df.columns.levels[0][0]  # get dataset name from MultiIndex
         signal = df[(dataset_name, channel_id)].values
         times = df.index.values
 
@@ -309,14 +330,25 @@ def spike_bar_graphs_all(dfs, channel_id, master_df, figures_dir):
         metrics_by_dataset[dataset_name] = metrics
 
         display_name = master_df.attrs.get("display_names", {}).get(dataset_name, dataset_name)
+        color = master_df.attrs.get("file_colors", {}).get(dataset_name, None)
 
-        save_path = f"{figures_dir}/spike_events_{display_name}.png"
-        plot_spike_with_events(signal, times, metrics, display_name, save_path)
+        #plot event with the spike
+        plot_spike_with_events(signal, times, metrics, display_name)
 
     # ---------- BAR GRAPHS ----------
     for group in metric_groups:
-        n_bars = len(group["keys"])
-        x = x_positions[:n_bars]
+        n_metrics = len(group["keys"])          # e.g., 2 for slope_depol & slope_repol
+        n_datasets = len(dfs)                   # number of datasets to plot
+        total_block_width = 0.8                 # total width for each metric block
+        if n_metrics == 2:
+            width = 0.15
+        elif n_metrics == 3:
+            width = 0.25
+        else:
+            width = 0.8 / n_datasets 
+
+        x = np.arange(n_metrics)  # positions for each metric
+        total_block_width = width * n_datasets
 
         plt.figure(figsize=(6 + n_datasets, 5))
         max_val = 0
@@ -326,43 +358,44 @@ def spike_bar_graphs_all(dfs, channel_id, master_df, figures_dir):
             metrics = metrics_by_dataset[dataset_name]
 
             vals = [metrics[k] for k in group["keys"]]
-
             display_name = master_df.attrs.get("display_names", {}).get(dataset_name, dataset_name)
             color = master_df.attrs.get("file_colors", {}).get(dataset_name, None)
 
+            # Shift bars left/right to center around metric position
+            bar_positions = x - total_block_width/2 + i*width + width/2
+
             bars = plt.bar(
-                x - (n_datasets - 1) * width / 2 + i * width,
+                bar_positions,
                 vals,
-                width,
+                width=width,
                 label=display_name,
                 color=color,
-                alpha=0.7
+                alpha=0.9
             )
 
             max_val = max(max_val, max(vals))
-
             for bar in bars:
                 yval = bar.get_height()
+                """
                 plt.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    yval + 0.02 * max_val,
-                    f"{yval:.1f}",
+                    bar.get_x() + bar.get_width()/2,
+                    yval + 0.02*max_val,
+                    f"{yval:.3f}",
                     ha='center',
                     va='bottom',
-                    fontsize=10
+                    fontsize=9
                 )
+                """
 
         plt.xticks(x, group["labels"])
         plt.ylabel(group["ylabel"])
         plt.title(group["title"])
-        plt.xlim(-0.1, 1.1)
+        plt.xlim(-0.5, n_metrics - 0.5)
+        plt.ylim(top=max_val * 1.1)
         plt.legend()
         plt.grid(axis='y', alpha=0.3)
         plt.tight_layout()
-
-        plt.savefig(
-            f"{figures_dir}/{group['title'].replace(' ', '_')}.png",
-            dpi=300,
-            bbox_inches='tight'
-        )
+        plt.savefig(f"{figures_dir}/{group['title'].replace(' ', '_')}.png", dpi=300, bbox_inches='tight')
         plt.show()
+
+

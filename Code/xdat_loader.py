@@ -69,11 +69,11 @@ def xdat_to_multichannel_df(xdat_dict, file_index):
     dataset_name = base_name.split('__uid')[0]
 
     # segment 1
-    t1 = xdat_dict["segment_1"]["timestamps"]
+    t1 = xdat_dict["segment_1"]["time_samples"]
     s1 = xdat_dict["segment_1"]["signals"]   # shape: (channels, time)
 
     # segment 2
-    t2 = xdat_dict["segment_2"]["timestamps"]
+    t2 = xdat_dict["segment_2"]["time_samples"]
     s2 = xdat_dict["segment_2"]["signals"]
 
     time = np.concatenate([t1, t2])
