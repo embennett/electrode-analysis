@@ -110,9 +110,9 @@ def plot_channel_across_files(
 def raster_plot(
         master_df,
         channel_id,
+        datasets = None,
         t_start=None,
         t_end=None,
-        offset = 1.0,
         figures_dir=None
 ):
     df=master_df
@@ -121,7 +121,10 @@ def raster_plot(
     
     colors = master_df.attrs.get('file_colors', {})
     display_names = master_df.attrs.get('display_names', {})
-    datasets = master_df.columns.get_level_values(0).unique()
+    if datasets == None:
+        datasets = master_df.columns.get_level_values(0).unique()
+    else:
+        datasets = datasets
     
     n = len(datasets)
     plt.figure(figsize = (8, 1.5*n))
@@ -129,7 +132,7 @@ def raster_plot(
     # compute a reasonable vertical spacing
     signals = [df[(ds, channel_id)] for ds in datasets]
     ptp = max(s.max() - s.min() for s in signals)
-    spacing = ptp * 1.2   # 20% padding
+    spacing = ptp * .8   # 20% padding
 
 
     for i, dataset in enumerate(datasets):
@@ -155,7 +158,8 @@ def raster_plot(
     plt.yticks(yticks, ylabels)
 
     plt.xlabel('Time (s)')
-    plt.title(f'Channel {channel_id} All Traces')
+    #plt.title(f'Channel {channel_id} All Traces')
+    
     plt.grid(alpha=0.3)
     plt.tight_layout()
 
@@ -166,66 +170,111 @@ def raster_plot(
     plt.show()
 
 # bar graphs fxns -----------------------------------------------------
-
-#helper fxn to analyze the spike timing, assumes the signal being fed t
 def analyze_spike(signal_spike, time_spike):
-    # baseline = mean of first 10%
-    n_base = int(0.1 * len(signal_spike))
+    # ---- Baseline (first 5%) ----
+    n_base = int(0.05 * len(signal_spike))
     V_rest = np.mean(signal_spike[:n_base])
 
-    # depolarization: find minimum
-    idx_min = np.argmin(signal_spike)
-    V_min = signal_spike[idx_min]
-    t_min = time_spike[idx_min]
+    # ---- Spike peak (global max) ----
+    idx_peak = np.argmax(signal_spike)
+    V_peak = signal_spike[idx_peak]
+    t_peak = time_spike[idx_peak]
 
-    # find peak after minimum
-    idx_peak = idx_min + np.argmax(signal_spike[idx_min:])
-    V_max = signal_spike[idx_peak]
-    t_max = time_spike[idx_peak]
-
-    # depolarization time: baseline → min → peak
-    idx_rest_before = np.where(signal_spike[:idx_min] > V_rest)[0]
-    t_rest = time_spike[idx_rest_before[-1]] if len(idx_rest_before) > 0 else time_spike[0]
-    t_depol = t_max - t_rest
-    dV_depol = V_max - V_rest
-    slope_depol = dV_depol / t_depol
-
-    # repolarization time: peak → baseline
-    # repolarization time: peak → baseline
-    idx_rest_after_candidates = np.where(signal_spike[idx_peak:] < V_rest)[0]
-    if len(idx_rest_after_candidates) > 0:
-        idx_rest_after = idx_peak + idx_rest_after_candidates[0]
-        t_rest_after = time_spike[idx_rest_after]
-        t_repol = t_rest_after - t_max
-        V_rest_after = signal_spike[idx_rest_after]
+    # ---- Depolarization: baseline → peak ----
+    '''
+    idx_rest_before = np.where(signal_spike[:idx_peak] <= V_rest)[0]
+    if len(idx_rest_before) > 0:
+        idx_rest = idx_rest_before[-1]
+        t_rest = time_spike[idx_rest]
+        t_depol = t_peak - t_rest
+        dV_depol = V_peak - V_rest
+        slope_depol = dV_depol / t_depol if t_depol != 0 else np.nan
     else:
-        t_repol = 0
-        t_rest_after = t_max
-        V_rest_after = V_rest  # fallback
+        # No valid baseline crossing before peak
+        t_rest = np.nan
+        t_depol = np.nan
+        dV_depol = np.nan
+        slope_depol = np.nan
+    '''
+    tolerance = 30  # mV
 
-    # delta V for repolarization: from peak down to baseline
-    dV_repol = V_max - V_rest_after
-    slope_repol = -dV_repol / t_repol if t_repol != 0 else np.nan  # negative slope to show downward
+    pre_peak = signal_spike[:idx_peak]
+    deviation = np.abs(pre_peak - V_rest)
 
-    # hyperpolarization time after repolarization
-    post_repol_idx = np.where(time_spike > time_spike[idx_rest_after_candidates[0]] if len(idx_rest_after_candidates) > 0 else t_max)[0]
-    hyper_idx = post_repol_idx[signal_spike[post_repol_idx] < V_rest] if len(post_repol_idx) > 0 else []
-    t_hyper = (time_spike[hyper_idx[-1]] - time_spike[hyper_idx[0]]) if len(hyper_idx) > 0 else 0
+    idx_deviation = np.where(deviation > tolerance)[0]
 
-    # outputs: same keys as original function
+    if len(idx_deviation) > 0:
+        idx_rest = idx_deviation[0]  # first point outside tolerance
+        t_rest = time_spike[idx_rest]
+        t_depol = t_peak - t_rest
+        dV_depol = V_peak - V_rest
+        slope_depol = dV_depol / t_depol if t_depol != 0 else np.nan
+    else:
+        t_rest = np.nan
+        t_depol = np.nan
+        dV_depol = np.nan
+        slope_depol = np.nan
+
+    # ---- Repolarization: peak → baseline ----
+    post_peak = signal_spike[idx_peak:]
+    post_peak_time = time_spike[idx_peak:]
+    rel = post_peak - V_rest  # Signal relative to baseline
+
+    # Find zero-crossings
+    crossings = np.where(np.diff(np.sign(rel)) != 0)[0]
+    if len(crossings) > 0:
+        idx_cross = idx_peak + crossings[0]
+        t_base_after_peak = time_spike[idx_cross]
+        t_repol = t_base_after_peak - t_peak
+        dV_repol = V_peak - V_rest
+        slope_repol = -dV_repol / t_repol if t_repol != 0 else np.nan
+    else:
+        t_base_after_peak = np.nan
+        t_repol = np.nan
+        dV_repol = np.nan
+        slope_repol = np.nan
+    
+
+    # ---- Hyperpolarization duration ----
+    if not np.isnan(t_base_after_peak):
+        idx_start_hyper = idx_cross
+        hyper_segment = signal_spike[idx_start_hyper:]
+        hyper_time = time_spike[idx_start_hyper:]
+
+        # Find minimum
+        idx_min_local = np.argmin(hyper_segment)
+        V_min = hyper_segment[idx_min_local]
+        t_min = hyper_time[idx_min_local]
+
+        # Find return to baseline after minimum
+        rel_hyper = hyper_segment[idx_min_local:] - V_rest
+        crossings2 = np.where(np.diff(np.sign(rel_hyper)) != 0)[0]
+
+        if len(crossings2) > 0:
+            idx_end = idx_start_hyper + idx_min_local + crossings2[0]
+            t_hyper_end = time_spike[idx_end]
+            t_rest_after = time_spike[idx_cross]
+            t_hyper = t_hyper_end - t_base_after_peak
+        else:
+            t_hyper = np.nan
+    else:
+        t_hyper = np.nan
+
     return {
         "t_depol": t_depol,
         "t_repol": t_repol,
         "t_hyper": t_hyper,
-        "V_depol_abs": V_min,
-        "V_repol_abs": V_max,
+        "V_depol_abs": V_peak,
+        "V_repol_abs": V_rest,
         "dV_depol": dV_depol,
         "dV_repol": dV_repol,
         "slope_depol": slope_depol,
         "slope_repol": slope_repol,
-        "t_rest": t_rest,          
-        "t_peak": t_max,          
-        "t_rest_after": t_rest_after
+        "t_rest": t_rest,
+        "t_peak": t_peak,
+        "t_rest_after": t_rest_after,  # new additions (optional)
+        "V_min": V_min,
+        "dV_hyper": V_rest - V_min
     }
 
 
@@ -240,15 +289,18 @@ def plot_spike_with_events(signal_spike, time_spike, metrics, Dose, save_path=No
     plt.plot(time_spike, signal_spike, color='black', label='Signal')
 
     # Depolarization start (baseline crossing before min)
-    plt.axvline(metrics['t_rest'], color='orange', linestyle='--', label='Depol start')
+    if not np.isnan(metrics['t_rest']):
+        plt.axvline(metrics['t_rest'], color='orange', linestyle='--', label='Depol start')
 
     # Depolarization end / Repolarization start (peak)
-    idx_peak = np.argwhere(signal_spike == metrics['V_repol_abs'])[0][0]
+    # Use closest value to V_peak instead of exact equality
+    idx_peak = np.argmin(np.abs(signal_spike - metrics['V_depol_abs']))
     t_peak = time_spike[idx_peak]
     plt.axvline(t_peak, color='blue', linestyle='--', label='Depol end / Repol start')
 
     # Repolarization end / next depolarization start (baseline after peak)
-    idx_rest_after_candidates = np.where(signal_spike[idx_peak:] < np.mean(signal_spike[:int(0.1*len(signal_spike))]))[0]
+    baseline = np.mean(signal_spike[:int(0.1*len(signal_spike))])
+    idx_rest_after_candidates = np.where(signal_spike[idx_peak:] < baseline)[0]
     if len(idx_rest_after_candidates) > 0:
         idx_rest_after = idx_peak + idx_rest_after_candidates[0]
         t_rest_after = time_spike[idx_rest_after]
@@ -257,14 +309,13 @@ def plot_spike_with_events(signal_spike, time_spike, metrics, Dose, save_path=No
         t_rest_after = t_peak
 
     # Hyperpolarization end (end of below-baseline period after repolarization)
-    if metrics['t_hyper'] > 0:
+    if metrics['t_hyper'] is not None and not np.isnan(metrics['t_hyper']) and metrics['t_hyper'] > 0:
         t_hyper_end = t_rest_after + metrics['t_hyper']
         plt.axvline(t_hyper_end, color='purple', linestyle='--', label='Hyperpol end')
 
     plt.xlabel('Time (ms)')
     plt.ylabel('Voltage (µV)')
     plt.title(f'Spike with Depolarization/Repolarization Events for {Dose}')
-    plt.ylim(-3000, 3000)
     plt.legend()
     plt.grid(alpha=0.3)
     plt.show()
@@ -376,7 +427,7 @@ def spike_bar_graphs_all(dfs, channel_id, master_df, figures_dir):
             max_val = max(max_val, max(vals))
             for bar in bars:
                 yval = bar.get_height()
-                """
+                
                 plt.text(
                     bar.get_x() + bar.get_width()/2,
                     yval + 0.02*max_val,
@@ -385,7 +436,7 @@ def spike_bar_graphs_all(dfs, channel_id, master_df, figures_dir):
                     va='bottom',
                     fontsize=9
                 )
-                """
+                
 
         plt.xticks(x, group["labels"])
         plt.ylabel(group["ylabel"])

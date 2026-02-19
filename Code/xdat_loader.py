@@ -4,6 +4,7 @@ import allego_file_reader as afr
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import random
 
 #fxn the list all xdat sources
 def list_xdat_sources(target_dir):
@@ -32,9 +33,13 @@ def load_xdat_by_index(target_dir, index):
 
     time_range = afr.get_allego_xdat_time_range(file_path)
 
-    time_start = 0
-    time_mid = time_range[1] / 2
-    time_end = time_range[1]
+    time_start = time_range[0]
+    if time_range[1]>300:
+        time_end = 300
+        time_mid = 150
+    else:
+        time_mid = time_range[1] / 2
+        time_end = time_range[1]
 
     # the loading in two segments is to prevent the data from truncating since loading takes a long time
     seg1 = afr.read_allego_xdat_pri_signals(
@@ -66,7 +71,8 @@ def load_xdat_by_index(target_dir, index):
 # this is a helper fxn
 def xdat_to_multichannel_df(xdat_dict, file_index):
     base_name = xdat_dict["base_name"]
-    dataset_name = base_name.split('__uid')[0]
+    dataset_name = base_name
+    #dataset_name = base_name.split('__uid')[0]
 
     # segment 1
     t1 = xdat_dict["segment_1"]["time_samples"]
@@ -124,13 +130,14 @@ def build_dataframe(target_dir, index):
 
     return master_df
 
+
 def assign_colors(master_df):
     """
     Assign one Set3 color per dataset (filename).
     Stores result in master_df.attrs['file_colors'].
     """
 
-    palette = plt.cm.Set3.colors  # 12 pastel colors
+    palette = plt.cm.tab10.colors  # 12 pastel colors
 
     datasets = master_df.columns.get_level_values('dataset').unique()
 
@@ -141,8 +148,50 @@ def assign_colors(master_df):
 
     master_df.attrs['file_colors'] = file_colors
     return file_colors
+'''
+def assign_colors(master_df, color_list=None):
+    """
+    This was chat gpt
+    Assign colors per dataset based on index.
+    
+    Parameters:
+    -----------
+    master_df : pandas DataFrame
+        Must contain a column level named 'dataset'
+    color_list : list
+        List of colors indexed by dataset index.
+        If an index has None or is missing, a color from tab10 is assigned.
 
+    Returns:
+    --------
+    dict mapping dataset -> color
+    """
 
+    tab10_colors = list(plt.cm.tab10.colors)
+    datasets = master_df.columns.get_level_values('dataset').unique()
+
+    file_colors = {}
+    used_colors = set()
+
+    for i, dataset in enumerate(datasets):
+
+        # If user provided a color list and index exists
+        if color_list is not None and i < len(color_list) and color_list[i] not in [None, 0]:
+            color = color_list[i]
+        else:
+            # Pick an unused tab10 color
+            available = [c for c in tab10_colors if c not in used_colors]
+            if not available:
+                # fallback if all used
+                available = tab10_colors
+            color = random.choice(available)
+
+        file_colors[dataset] = color
+        used_colors.add(color)
+
+    master_df.attrs['file_colors'] = file_colors
+    return file_colors
+'''
 def add_display_names(master_df, dataset_index, display_names):
     if len(dataset_index) != len(display_names):
         raise ValueError("dataset_indices and pretty_names must be the same length")
