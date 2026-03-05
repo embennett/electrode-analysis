@@ -12,6 +12,7 @@ def plot_channel(
        t_start=None,
        t_end=None,
        ylim=None,
+       figsize = None,
        figures_dir=None
 ):
     df=master_df
@@ -21,7 +22,10 @@ def plot_channel(
     colors = master_df.attrs.get('file_colors', {})
     display_dict = master_df.attrs['display_names']
     
-    plt.figure(figsize = (5,5))
+    if figsize is not None:
+        plt.figure(figsize=figsize)
+    else:
+        plt.figure(figsize = (5,5))
     plt.plot(           
         df.index,
         df[(dataset_name, channel_id)],
@@ -132,7 +136,7 @@ def raster_plot(
     # compute a reasonable vertical spacing
     signals = [df[(ds, channel_id)] for ds in datasets]
     ptp = max(s.max() - s.min() for s in signals)
-    spacing = ptp * .8   # 20% padding
+    spacing = ptp * .5   # 20% padding
 
 
     for i, dataset in enumerate(datasets):

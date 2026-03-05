@@ -27,42 +27,47 @@ def get_xdat_indices(target_dir):
 #fxn to load in xdat data
 def load_xdat_by_index(target_dir, index):
     names = list_xdat_sources(target_dir)
-    
     base_name = names[index]
     file_path = str(Path(target_dir, base_name))
 
     time_range = afr.get_allego_xdat_time_range(file_path)
-
-    time_start = time_range[0]
-    if time_range[1]>300:
-        time_end = 300
-        time_mid = 150
-    else:
-        time_mid = time_range[1] / 2
-        time_end = time_range[1]
-
-    # the loading in two segments is to prevent the data from truncating since loading takes a long time
-    seg1 = afr.read_allego_xdat_pri_signals(
-        file_path, time_start, time_mid
-    )
-    seg2 = afr.read_allego_xdat_pri_signals(
-        file_path, time_mid, time_end
-    )
-
-    return {
+    time_start = np.ceil(time_range[0])
+    time_end = time_range[1]
+    duration = time_end - time_start
+    result = {
         "base_name": base_name,
         "time_range": time_range,
-        "segment_1": {
-            "signals": seg1[0],
-            "timestamps": seg1[1],
-            "time_samples": seg1[2],
-        },
-        "segment_2": {
-            "signals": seg2[0],
-            "timestamps": seg2[1],
-            "time_samples": seg2[2],
-        },
     }
+    
+    if duration > 300:
+        time_mid1 = time_start + duration * (1/4)
+        time_mid2 = time_start + duration * (2/4)
+        time_mid3 = time_start + duration * (3/4)
+
+        segments = [
+            afr.read_allego_xdat_pri_signals(file_path, time_start, time_mid1),
+            afr.read_allego_xdat_pri_signals(file_path, time_mid1, time_mid2),
+            afr.read_allego_xdat_pri_signals(file_path, time_mid2, time_mid3),
+            afr.read_allego_xdat_pri_signals(file_path, time_mid3, time_end),
+        ]
+
+    else:
+        time_mid = time_start + duration / 2
+
+        segments = [
+            afr.read_allego_xdat_pri_signals(file_path, time_start, time_mid),
+            afr.read_allego_xdat_pri_signals(file_path, time_mid, time_end),
+        ]
+
+    # Add segments dynamically
+    for i, seg in enumerate(segments, start=1):
+        result[f"segment_{i}"] = {
+            "signals": seg[0].astype(np.float32),
+            "timestamps": seg[1],
+            "time_samples": seg[2],
+        }
+
+    return result
 
 # the next few funstion are to build a dataframe to handel the data better
 # since the data care have varying indexs in the file it was safer for it to be loaded
@@ -82,9 +87,25 @@ def xdat_to_multichannel_df(xdat_dict, file_index):
     t2 = xdat_dict["segment_2"]["time_samples"]
     s2 = xdat_dict["segment_2"]["signals"]
 
-    time = np.concatenate([t1, t2])
-    signals = np.concatenate([s1, s2], axis=1)  # (channels, time)
+    if "segment_3" in xdat_dict:
+        # segment 3
+        t3 = xdat_dict["segment_3"]["time_samples"]
+        s3 = xdat_dict["segment_3"]["signals"]
 
+        # segment 4
+        t4 = xdat_dict["segment_4"]["time_samples"]
+        s4 = xdat_dict["segment_4"]["signals"]
+
+        time = np.concatenate([t1, t2, t3, t4])
+        signals = np.concatenate([s1, s2, s3, s4], axis=1)  # (channels, time)
+        signals = s1
+        for s in [s2, s3, s4]:
+            signals = np.concatenate((signals, s), axis=1)
+    else:
+        time = np.concatenate([t1, t2])
+        signals = np.concatenate([s1, s2], axis=1)  # (channels, time)
+    
+    time = time - time[0]
     # build DataFrame: time × channel
     df = pd.DataFrame(
         signals.T,
@@ -137,7 +158,7 @@ def assign_colors(master_df):
     Stores result in master_df.attrs['file_colors'].
     """
 
-    palette = plt.cm.tab10.colors  # 12 pastel colors
+    palette = plt.cm.Set2.colors  # 12 pastel colors
 
     datasets = master_df.columns.get_level_values('dataset').unique()
 
